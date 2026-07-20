@@ -14,70 +14,85 @@ typedef int64_t int64;
 
 // TODO: à bouger plus tard
 static BOOL bRunning;
-static BITMAPINFO BitMapInfo;
-static void *BitMapMemory;
 
-//TEMP
-static int BitMapWidth;
-static int BitMapHeight;
-static int bytesPerPixel = 4;
+struct HMH_offscreen_buffer
+{
+    BITMAPINFO Info;
+    void* Memory;
+    int Width;
+    int Height;
+    int Pitch;
+    int bytesPerPixel;
+};
 
+static struct HMH_offscreen_buffer BackBuffer;
 
-void RenderWeirdGradient(int XOffset, int YOffset){
+struct HMH_Window_dimension{
+    int Width;
+    int Height;
+};
 
-    int Width = BitMapWidth;
-    //int Height = BitMapHeight;
+struct HMH_Window_dimension getWindowDimension(HWND window){
+    struct HMH_Window_dimension WD;
+    RECT ClientRect;
+    GetClientRect(window, &ClientRect);
+    WD.Height = ClientRect.bottom - ClientRect.top;
+    WD.Width = ClientRect.right - ClientRect.left;
+
+    return WD;
+}
+
+void RenderWeirdGradient(struct HMH_offscreen_buffer buffer, int XOffset, int YOffset){
+
+    //TODO: check si passage par value est mieux
     
-
-    int Pitch = Width*bytesPerPixel;
-    uint8 *Row = (uint8*) BitMapMemory;
-    for (int Y = 0; Y < BitMapHeight; ++Y){
+    uint8 *Row = (uint8*) buffer.Memory;
+    for (int Y = 0; Y < buffer.Height; ++Y){
         uint32 *Pixel = (uint32*) Row; 
 
-        for (int X = 0; X < BitMapWidth; ++X){
+        for (int X = 0; X < buffer.Width; ++X){
             uint8 blue = (X + XOffset);
             uint8 green = (Y + YOffset);
 
             *Pixel++ = (green << 8 | blue);
             
         }
-        Row += Pitch;
+        Row += buffer.Pitch;
     }
 
 }
 
 
-void HMH_ResizeDIBSection(int Width, int Height){
+void HMH_ResizeDIBSection(struct HMH_offscreen_buffer *buffer,int Width, int Height){
 
     // TODO: tester les perfs
 
-    if(BitMapMemory){
-        VirtualFree(BitMapMemory,0, MEM_RELEASE);
+    if(buffer->Memory){
+        VirtualFree(buffer->Memory,0, MEM_RELEASE);
     }
 
-    BitMapWidth = Width;
-    BitMapHeight = Height;
+    buffer->Width = Width;
+    buffer->Height = Height;
+    buffer->bytesPerPixel = 4;
 
 
-    BitMapInfo.bmiHeader.biSize = sizeof(BitMapInfo.bmiHeader);
-    BitMapInfo.bmiHeader.biWidth = BitMapWidth;
-    BitMapInfo.bmiHeader.biHeight = -BitMapHeight; //negative pour qu'en mémoire, les lignes descendent
-    BitMapInfo.bmiHeader.biPlanes = 1;
-    BitMapInfo.bmiHeader.biBitCount = 32;
-    BitMapInfo.bmiHeader.biCompression = BI_RGB;
+    buffer->Info.bmiHeader.biSize = sizeof(buffer->Info.bmiHeader);
+    buffer->Info.bmiHeader.biWidth = buffer->Width;
+    buffer->Info.bmiHeader.biHeight = -buffer->Height; //negative pour qu'en mémoire, les lignes descendent
+    buffer->Info.bmiHeader.biPlanes = 1;
+    buffer->Info.bmiHeader.biBitCount = 32;
+    buffer->Info.bmiHeader.biCompression = BI_RGB;
 
-    int BitMapMemorySize = (BitMapWidth*BitMapHeight) * bytesPerPixel;
-    BitMapMemory = VirtualAlloc(0, BitMapMemorySize, MEM_COMMIT,PAGE_READWRITE);
+    int BitMapMemorySize = (buffer->Width*buffer->Height) * buffer->bytesPerPixel;
+    buffer->Memory = VirtualAlloc(0, BitMapMemorySize, MEM_COMMIT,PAGE_READWRITE);
 
-    //TODO : clear to black
+    buffer->Pitch = Width*buffer->bytesPerPixel;
 }
 
-void HMH_UpdateWindow(HDC DContextPaint, RECT *ClientRect, int X, int Y, int Width, int Height){
-
-    int WindowWidth = ClientRect->right - ClientRect->left;
-    int WindowHeight = ClientRect->bottom - ClientRect->top;
-    //StretchDIBits(DContextPaint,X,Y, Width, Height, X,Y, Width, Height, BitMapMemory, &BitMapInfo, DIB_RGB_COLORS, SRCCOPY);
-    StretchDIBits(DContextPaint,0,0, BitMapWidth, BitMapHeight, X,Y, WindowWidth, WindowHeight, BitMapMemory, &BitMapInfo, DIB_RGB_COLORS, SRCCOPY);
+void HMH_DisplayBufferInWindow(HDC DContextPaint, int WindowWidth, int WindowHeight, struct HMH_offscreen_buffer buffer,int X, int Y, int Width, int Height){
+    
+    //TODO : change the aspect ratio
+    StretchDIBits(DContextPaint,0,0, WindowWidth, WindowHeight, 0,0, buffer.Width, buffer.Height,buffer.Memory, &(buffer.Info), DIB_RGB_COLORS, SRCCOPY);
 }
 
 LRESULT CALLBACK
@@ -93,11 +108,6 @@ HMH_MainWindowCallback(
     {
     case WM_SIZE:
         OutputDebugStringA("WM_SIZE");
-        RECT ClientRect;
-        GetClientRect(hWnd, &ClientRect);
-        int Height = ClientRect.bottom - ClientRect.top;
-        int Width = ClientRect.right - ClientRect.left;
-        HMH_ResizeDIBSection(Width,Height);
         break;
     case WM_DESTROY:
         OutputDebugStringA("WM_DESTROY");
@@ -120,9 +130,9 @@ HMH_MainWindowCallback(
         int Height = paintStruct.rcPaint.bottom - paintStruct.rcPaint.top;
         int Width = paintStruct.rcPaint.right - paintStruct.rcPaint.left;
 
-        RECT ClientRect;
-        GetClientRect(hWnd, &ClientRect);
-        HMH_UpdateWindow( DContextPaint, &ClientRect ,X,Y, Width, Height);
+
+        struct HMH_Window_dimension Dimension = getWindowDimension(hWnd);
+        HMH_DisplayBufferInWindow( DContextPaint, Dimension.Width, Dimension.Height, BackBuffer,X,Y, Width, Height);
         EndPaint(hWnd, &paintStruct);
     }
         break;
@@ -138,8 +148,11 @@ HMH_MainWindowCallback(
 
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow){
     
+
     WNDCLASSA WindowClass = {0};
-    WindowClass.style = CS_OWNDC | CS_HREDRAW | CS_VREDRAW;
+    HMH_ResizeDIBSection(&BackBuffer, 1280, 720);
+
+    WindowClass.style = CS_HREDRAW | CS_VREDRAW;
     WindowClass.lpfnWndProc = HMH_MainWindowCallback;
     WindowClass.hInstance = hInstance;
     WindowClass.lpszClassName = "HandMadeHeroWindowClass";
@@ -173,16 +186,12 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                     TranslateMessage(&message);
                     DispatchMessage(&message);
                 }
-                RenderWeirdGradient(XOffset, YOffset);
+                RenderWeirdGradient( BackBuffer,XOffset, YOffset);
 
                 HDC DContextPaint = GetDC(WindowHandle);
-                RECT ClientRect;
-                GetClientRect(WindowHandle, &ClientRect);
+                struct HMH_Window_dimension Dimension = getWindowDimension(WindowHandle);
 
-                int WindowWidth = ClientRect.bottom - ClientRect.top;
-                int WindowHeight = ClientRect.right - ClientRect.left;
-
-                HMH_UpdateWindow( DContextPaint, &ClientRect , 0, 0, WindowWidth, WindowHeight);
+                HMH_DisplayBufferInWindow( DContextPaint, Dimension.Width, Dimension.Height, BackBuffer,0, 0, Dimension.Width, Dimension.Height);
                 ReleaseDC(WindowHandle, DContextPaint);
 
                 ++XOffset;

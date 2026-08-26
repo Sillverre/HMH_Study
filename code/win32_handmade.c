@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <stdint.h>
+#include <xinput.h>
 
 typedef uint8_t uint8;
 typedef uint16_t uint16;
@@ -31,6 +32,35 @@ struct HMH_Window_dimension{
     int Width;
     int Height;
 };
+//// Xinput 
+// Xinput functions to import
+#define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserId, XINPUT_STATE* pState)
+typedef X_INPUT_GET_STATE(x_input_get_state);
+X_INPUT_GET_STATE(XInputGetStateStub){
+    return 0;
+}
+static x_input_get_state *XInputGetState_ = XInputGetStateStub;
+
+#define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserId, XINPUT_VIBRATION* pVibration)
+typedef X_INPUT_SET_STATE(x_input_set_state);
+X_INPUT_SET_STATE(XInputSetStateStub){
+    return 0;
+}
+static x_input_set_state *XInputSetState_ = XInputSetStateStub;
+
+#define XInputGetState XInputGetState_
+#define XInputSetState XInputSetState_
+//
+static void HMH_LoadXinput(void){
+    HMODULE XinputLib= LoadLibraryA("Xinput1_3.dll");
+    if(XinputLib){
+        XInputGetState = (x_input_get_state*) GetProcAddress(XinputLib,"XInputGetState");
+        XInputSetState = (x_input_set_state*) GetProcAddress(XinputLib,"XInputSetState");
+    }
+}
+////
+
+
 
 struct HMH_Window_dimension getWindowDimension(HWND window){
     struct HMH_Window_dimension WD;
@@ -42,22 +72,22 @@ struct HMH_Window_dimension getWindowDimension(HWND window){
     return WD;
 }
 
-void RenderWeirdGradient(struct HMH_offscreen_buffer buffer, int XOffset, int YOffset){
+void RenderWeirdGradient(struct HMH_offscreen_buffer *buffer, int XOffset, int YOffset){
 
     //TODO: check si passage par value est mieux
     
-    uint8 *Row = (uint8*) buffer.Memory;
-    for (int Y = 0; Y < buffer.Height; ++Y){
+    uint8 *Row = (uint8*) buffer->Memory;
+    for (int Y = 0; Y < buffer->Height; ++Y){
         uint32 *Pixel = (uint32*) Row; 
 
-        for (int X = 0; X < buffer.Width; ++X){
+        for (int X = 0; X < buffer->Width; ++X){
             uint8 blue = (X + XOffset);
             uint8 green = (Y + YOffset);
 
             *Pixel++ = (green << 8 | blue);
             
         }
-        Row += buffer.Pitch;
+        Row += buffer->Pitch;
     }
 
 }
@@ -89,10 +119,10 @@ void HMH_ResizeDIBSection(struct HMH_offscreen_buffer *buffer,int Width, int Hei
     buffer->Pitch = Width*buffer->bytesPerPixel;
 }
 
-void HMH_DisplayBufferInWindow(HDC DContextPaint, int WindowWidth, int WindowHeight, struct HMH_offscreen_buffer buffer,int X, int Y, int Width, int Height){
+void HMH_DisplayBufferInWindow( struct HMH_offscreen_buffer *buffer, HDC DContextPaint, int WindowWidth, int WindowHeight){
     
     //TODO : change the aspect ratio
-    StretchDIBits(DContextPaint,0,0, WindowWidth, WindowHeight, 0,0, buffer.Width, buffer.Height,buffer.Memory, &(buffer.Info), DIB_RGB_COLORS, SRCCOPY);
+    StretchDIBits(DContextPaint,0,0, WindowWidth, WindowHeight, 0,0, buffer->Width, buffer->Height,buffer->Memory, &(buffer->Info), DIB_RGB_COLORS, SRCCOPY);
 }
 
 LRESULT CALLBACK
@@ -120,19 +150,63 @@ HMH_MainWindowCallback(
     case WM_ACTIVATEAPP:
         OutputDebugStringA("WM_ACTIVATEAPP");
         break;
+
+    case WM_SYSKEYDOWN:
+    case WM_SYSKEYUP:
+    case WM_KEYDOWN:
+    case WM_KEYUP:
+    {
+        uint32 VKCode = wParam;
+        BOOL wasDown = ((lParam & (1 << 30)) != 0);
+        BOOL isDown = ((lParam & (1 << 31)) == 0);
+        if(isDown != wasDown){
+            if(VKCode == 'Z'){
+
+            }
+            else if(VKCode == 'Q'){
+
+            }
+            else if(VKCode == 'S'){
+
+            }
+            else if(VKCode == 'D'){
+
+            }
+            else if(VKCode == 'A'){
+
+            }
+            else if(VKCode == 'E'){
+
+            }
+            else if(VKCode == VK_UP){
+
+            }
+            else if(VKCode == VK_DOWN){
+
+            }
+            else if(VKCode == VK_LEFT){
+
+            }
+            else if(VKCode == VK_RIGHT){
+
+            }
+            else if(VKCode == VK_SPACE){
+
+            }
+            else if(VKCode == VK_ESCAPE){
+
+            }
+        }
+        break;
+    }
+        
     case WM_PAINT:{
         OutputDebugStringA("WM_PAINT");
         PAINTSTRUCT paintStruct;
         HDC DContextPaint = BeginPaint(hWnd, &paintStruct);
-        
-        int X = paintStruct.rcPaint.left;
-        int Y = paintStruct.rcPaint.top;
-        int Height = paintStruct.rcPaint.bottom - paintStruct.rcPaint.top;
-        int Width = paintStruct.rcPaint.right - paintStruct.rcPaint.left;
-
 
         struct HMH_Window_dimension Dimension = getWindowDimension(hWnd);
-        HMH_DisplayBufferInWindow( DContextPaint, Dimension.Width, Dimension.Height, BackBuffer,X,Y, Width, Height);
+        HMH_DisplayBufferInWindow(&BackBuffer, DContextPaint, Dimension.Width, Dimension.Height);
         EndPaint(hWnd, &paintStruct);
     }
         break;
@@ -148,6 +222,7 @@ HMH_MainWindowCallback(
 
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow){
     
+    HMH_LoadXinput();
 
     WNDCLASSA WindowClass = {0};
     HMH_ResizeDIBSection(&BackBuffer, 1280, 720);
@@ -186,12 +261,61 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                     TranslateMessage(&message);
                     DispatchMessage(&message);
                 }
-                RenderWeirdGradient( BackBuffer,XOffset, YOffset);
+                
+                // TODO: poll plus souvent qu'à chaque frame
+                for (DWORD controllerId = 0; controllerId < XUSER_MAX_COUNT; controllerId++){
+                    XINPUT_STATE controllerState;
+                    if(XInputGetState(controllerId, &controllerState) == ERROR_SUCCESS){
+                        //branché
+                        //TODO: check si le numéro de packet dwPacketNumber grossit trop vite
+                        XINPUT_GAMEPAD *Pad = &controllerState.Gamepad;
+
+                        BOOL padU = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP);
+                        BOOL padD = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN);
+                        BOOL padL = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT);
+                        BOOL padR = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT);
+                        BOOL padStart = (Pad->wButtons & XINPUT_GAMEPAD_START);
+                        BOOL padBack = (Pad->wButtons & XINPUT_GAMEPAD_BACK);
+                        BOOL padLT = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_THUMB);
+                        BOOL padRT = (Pad->wButtons & XINPUT_GAMEPAD_RIGHT_THUMB);
+                        BOOL padLS = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER);
+                        BOOL padRS = (Pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER);
+                        BOOL padA = (Pad->wButtons & XINPUT_GAMEPAD_A);
+                        BOOL padB = (Pad->wButtons & XINPUT_GAMEPAD_B);
+                        BOOL padX = (Pad->wButtons & XINPUT_GAMEPAD_X);
+                        BOOL padY = (Pad->wButtons & XINPUT_GAMEPAD_Y);
+
+                        int16 StickX = Pad->sThumbLX;
+                        int16 StickY = Pad->sThumbLY;
+
+                        if(padA){
+                            YOffset += 2;
+                        }
+                         if(padY){
+                            YOffset -= 2;
+                        }
+                        else if(padB){
+                            XOffset += 2;
+                        }
+                        else if(padX){
+                            XOffset -= 2;
+                        }
+                    }
+                    else{
+                        //pas dispo
+                    }
+                }
+                XINPUT_VIBRATION Vibration;
+                Vibration.wLeftMotorSpeed = 60000;
+                Vibration.wRightMotorSpeed = 60000;
+                //XInputSetState(0, &Vibration);
+
+                RenderWeirdGradient( &BackBuffer,XOffset, YOffset);
 
                 HDC DContextPaint = GetDC(WindowHandle);
                 struct HMH_Window_dimension Dimension = getWindowDimension(WindowHandle);
 
-                HMH_DisplayBufferInWindow( DContextPaint, Dimension.Width, Dimension.Height, BackBuffer,0, 0, Dimension.Width, Dimension.Height);
+                HMH_DisplayBufferInWindow(&BackBuffer, DContextPaint, Dimension.Width, Dimension.Height);
                 ReleaseDC(WindowHandle, DContextPaint);
 
                 ++XOffset;

@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <xinput.h>
+#include <dsound.h>
 
 typedef uint8_t uint8;
 typedef uint16_t uint16;
@@ -37,14 +38,14 @@ struct HMH_Window_dimension{
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserId, XINPUT_STATE* pState)
 typedef X_INPUT_GET_STATE(x_input_get_state);
 X_INPUT_GET_STATE(XInputGetStateStub){
-    return 0;
+    return ERROR_DEVICE_NOT_CONNECTED;
 }
 static x_input_get_state *XInputGetState_ = XInputGetStateStub;
 
 #define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserId, XINPUT_VIBRATION* pVibration)
 typedef X_INPUT_SET_STATE(x_input_set_state);
 X_INPUT_SET_STATE(XInputSetStateStub){
-    return 0;
+    return ERROR_DEVICE_NOT_CONNECTED;
 }
 static x_input_set_state *XInputSetState_ = XInputSetStateStub;
 
@@ -52,13 +53,88 @@ static x_input_set_state *XInputSetState_ = XInputSetStateStub;
 #define XInputSetState XInputSetState_
 //
 static void HMH_LoadXinput(void){
-    HMODULE XinputLib= LoadLibraryA("Xinput1_3.dll");
+    HMODULE XinputLib= LoadLibraryA("Xinput1_4.dll"); // TODO: tester sur windows 8
+    if(!XinputLib){
+        XinputLib= LoadLibraryA("Xinput1_3.dll");
+    }
     if(XinputLib){
         XInputGetState = (x_input_get_state*) GetProcAddress(XinputLib,"XInputGetState");
         XInputSetState = (x_input_set_state*) GetProcAddress(XinputLib,"XInputSetState");
     }
 }
-////
+//// DirectSound
+//
+
+#define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID lpGUID,LPDIRECTSOUND *ppDS,LPUNKNOWN pUnkOuter)
+typedef DIRECT_SOUND_CREATE(direct_sound_create);
+
+static void HMH_InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize){
+    //NOTE: load library
+    HMODULE DSoundLib= LoadLibraryA("dsound.dll");
+    if (DSoundLib){
+        //NOTE: Get DSound object
+        direct_sound_create* DirectSoundCreate = (direct_sound_create*) GetProcAddress(DSoundLib,"DirectSoundCreate");
+
+        LPDIRECTSOUND DSound;
+        if (DirectSoundCreate && SUCCEEDED(DirectSoundCreate(0, &DSound, 0))){
+
+            WAVEFORMATEX WaveFormat = {};
+            WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
+            WaveFormat.nChannels = 2;
+            WaveFormat.nSamplesPerSec = SamplesPerSecond;
+            WaveFormat.wBitsPerSample = 16;
+            WaveFormat.nBlockAlign = (WaveFormat.nChannels * WaveFormat.wBitsPerSample) / 8;
+            WaveFormat.nAvgBytesPerSec = WaveFormat.nBlockAlign * WaveFormat.nSamplesPerSec;
+            WaveFormat.cbSize = 8;
+
+            if(SUCCEEDED(DSound->lpVtbl->SetCooperativeLevel(DSound, Window, DSSCL_PRIORITY))){
+                DSBUFFERDESC BufferDescription = {};
+                BufferDescription.dwSize = sizeof(BufferDescription);
+                BufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
+                
+                //NOTE: Make a primary buffer
+                LPDIRECTSOUNDBUFFER PrimaryBuffer;
+                if(SUCCEEDED(DSound->lpVtbl->CreateSoundBuffer(DSound, &BufferDescription, &PrimaryBuffer, 0))){ 
+                    
+                    HRESULT error = PrimaryBuffer->lpVtbl->SetFormat(PrimaryBuffer, &WaveFormat);
+                    if(SUCCEEDED(error)){
+
+                    }
+                    else{
+                        //TODO: diagnostic
+                    }
+                }
+                else{
+                    //TODO: diagnostic
+                }
+            }
+            else{
+                //TODO: diagnostic
+            }
+
+            //NOTE: Make a secondary buffer
+            DSBUFFERDESC BufferDescription = {};
+            BufferDescription.dwSize = sizeof(BufferDescription);
+            BufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
+            BufferDescription.dwBufferBytes = BufferSize;
+            BufferDescription.lpwfxFormat = &WaveFormat; //TODO: à vérifier
+            LPDIRECTSOUNDBUFFER SecondaryBuffer;
+            HRESULT error = DSound->lpVtbl->CreateSoundBuffer(DSound, &BufferDescription, &SecondaryBuffer, 0);
+            if(SUCCEEDED(error)){ 
+                //NOTE: Launch
+            }
+            
+
+            
+        }
+        else{
+
+        }
+    }
+    else{
+
+    }
+}
 
 
 
@@ -197,6 +273,10 @@ HMH_MainWindowCallback(
 
             }
         }
+        BOOL altWasDown = ((lParam & (1 << 29)) != 0);
+        if ((VKCode == VK_F4) && (altWasDown)){
+            bRunning = 0;
+        }
         break;
     }
         
@@ -250,6 +330,9 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             bRunning = 1;
             int XOffset = 0;
             int YOffset = 0;
+
+            HMH_InitDSound(WindowHandle, 40000, 40000*sizeof(int16)*2);
+
             while(bRunning){
             
                 MSG message;

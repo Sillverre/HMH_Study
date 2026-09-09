@@ -85,7 +85,7 @@ static void HMH_InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize
             WaveFormat.wBitsPerSample = 16;
             WaveFormat.nBlockAlign = (WaveFormat.nChannels * WaveFormat.wBitsPerSample) / 8;
             WaveFormat.nAvgBytesPerSec = WaveFormat.nBlockAlign * WaveFormat.nSamplesPerSec;
-            WaveFormat.cbSize = 8;
+            WaveFormat.cbSize = 0;
 
             if(SUCCEEDED(DSound->lpVtbl->SetCooperativeLevel(DSound, Window, DSSCL_PRIORITY))){
                 DSBUFFERDESC BufferDescription = {};

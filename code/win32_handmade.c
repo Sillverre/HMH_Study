@@ -28,6 +28,8 @@ struct HMH_offscreen_buffer
 };
 
 static struct HMH_offscreen_buffer BackBuffer;
+static LPDIRECTSOUNDBUFFER SecondaryBuffer;
+
 
 struct HMH_Window_dimension{
     int Width;
@@ -118,7 +120,6 @@ static void HMH_InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize
             BufferDescription.dwFlags = 0;
             BufferDescription.dwBufferBytes = BufferSize;
             BufferDescription.lpwfxFormat = &WaveFormat; //TODO: à vérifier
-            LPDIRECTSOUNDBUFFER SecondaryBuffer;
             HRESULT error = DSound->lpVtbl->CreateSoundBuffer(DSound, &BufferDescription, &SecondaryBuffer, 0);
             if(SUCCEEDED(error)){ 
                 //NOTE: Launch
@@ -328,10 +329,22 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             0);
         if(WindowHandle){
             bRunning = 1;
+
+            HDC DContextPaint = GetDC(WindowHandle);
+
             int XOffset = 0;
             int YOffset = 0;
 
-            HMH_InitDSound(WindowHandle, 40000, 40000*sizeof(int16)*2);
+            int SamplesPerSec = 40000;
+            int ToneHz = 256;
+            int16 ToneVolume = 3000;
+            uint32 RunningSampleId = 0;
+            int SquareWavePeriod = SamplesPerSec/ToneHz;
+            int HalfSquareWavePeriod = SquareWavePeriod/2; // To detect ups and downs in the square wave
+            int BytesPerSample = sizeof(int16)*2;
+            int SecondaryBufferSize = SamplesPerSec * BytesPerSample;
+            HMH_InitDSound(WindowHandle, SamplesPerSec, SecondaryBufferSize);
+            SecondaryBuffer->lpVtbl->Play(SecondaryBuffer, 0, 0, DSBPLAY_LOOPING);
 
             while(bRunning){
             
@@ -371,37 +384,61 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         int16 StickX = Pad->sThumbLX;
                         int16 StickY = Pad->sThumbLY;
 
-                        if(padA){
-                            YOffset += 2;
-                        }
-                         if(padY){
-                            YOffset -= 2;
-                        }
-                        else if(padB){
-                            XOffset += 2;
-                        }
-                        else if(padX){
-                            XOffset -= 2;
-                        }
+                        XOffset += StickX >> 12;
+                        YOffset += StickY >> 12;
                     }
                     else{
                         //pas dispo
                     }
                 }
-                XINPUT_VIBRATION Vibration;
-                Vibration.wLeftMotorSpeed = 60000;
-                Vibration.wRightMotorSpeed = 60000;
-                //XInputSetState(0, &Vibration);
-
                 RenderWeirdGradient( &BackBuffer,XOffset, YOffset);
 
-                HDC DContextPaint = GetDC(WindowHandle);
+                //NOTE: DSound output test
+                DWORD PlayCursor;
+                DWORD WriteCursor;
+                if(SUCCEEDED(SecondaryBuffer->lpVtbl->GetCurrentPosition(SecondaryBuffer, &PlayCursor, &WriteCursor))){
+
+                    DWORD ByteToLock  = RunningSampleId * BytesPerSample % SecondaryBufferSize;
+                    DWORD BytesToWrite;
+                    if (ByteToLock > PlayCursor){
+                        BytesToWrite = SecondaryBufferSize - ByteToLock;
+                        BytesToWrite += PlayCursor;
+                    }
+                    else{
+                        BytesToWrite = PlayCursor - ByteToLock;
+                    }
+                    VOID* region1;
+                    DWORD region1Size;
+                    VOID* region2;
+                    DWORD region2Size;
+                    
+                    if(SUCCEEDED(SecondaryBuffer->lpVtbl->Lock(SecondaryBuffer, ByteToLock, BytesToWrite, &region1, &region1Size, &region2, &region2Size, 0))){
+
+                        //TODO: assert regionSizes are valid
+                        int16* SampleOut = (int16*) region1;
+                        DWORD region1SampleCnt = region1Size/BytesPerSample;
+                        for(DWORD SampleId = 0; SampleId < region1SampleCnt; ++SampleId){
+                            int16 SampleValue = ((RunningSampleId++ / HalfSquareWavePeriod) % 2) ? ToneVolume : -ToneVolume;
+                            *SampleOut++ = SampleValue;
+                            *SampleOut++ = SampleValue;
+                        }
+
+                        SampleOut = (int16*) region2;
+                        DWORD region2SampleCnt = region2Size/BytesPerSample;
+                        for(DWORD SampleId = 0; SampleId < region2SampleCnt; ++SampleId){
+                            int16 SampleValue = ((RunningSampleId++ / HalfSquareWavePeriod) % 2) ? ToneVolume : -ToneVolume;
+                            *SampleOut++ = SampleValue;
+                            *SampleOut++ = SampleValue;
+                        }
+
+                        SecondaryBuffer->lpVtbl->Unlock(SecondaryBuffer, region1, region1Size, region2, region2Size);
+                    }
+                }
+
                 struct HMH_Window_dimension Dimension = getWindowDimension(WindowHandle);
 
                 HMH_DisplayBufferInWindow(&BackBuffer, DContextPaint, Dimension.Width, Dimension.Height);
-                ReleaseDC(WindowHandle, DContextPaint);
 
-                ++XOffset;
             }
         }
         else{

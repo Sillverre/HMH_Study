@@ -98,7 +98,7 @@ static void HMH_InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize
                     
                     HRESULT error = PrimaryBuffer->lpVtbl->SetFormat(PrimaryBuffer, &WaveFormat);
                     if(SUCCEEDED(error)){
-
+                        OutputDebugStringA("Primary Buffer format was set.\n");
                     }
                     else{
                         //TODO: diagnostic
@@ -115,7 +115,7 @@ static void HMH_InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize
             //NOTE: Make a secondary buffer
             DSBUFFERDESC BufferDescription = {};
             BufferDescription.dwSize = sizeof(BufferDescription);
-            BufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
+            BufferDescription.dwFlags = 0;
             BufferDescription.dwBufferBytes = BufferSize;
             BufferDescription.lpwfxFormat = &WaveFormat; //TODO: à vérifier
             LPDIRECTSOUNDBUFFER SecondaryBuffer;

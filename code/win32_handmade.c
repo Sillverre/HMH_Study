@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include <xinput.h>
 #include <dsound.h>
+#include <math.h>
+
+#define PI32 3.14159265359f
 
 typedef uint8_t uint8;
 typedef uint16_t uint16;
@@ -12,7 +15,8 @@ typedef int16_t int16;
 typedef int32_t int32;
 typedef int64_t int64;
 
-
+typedef float real32;
+typedef double real64;
 
 // TODO: à bouger plus tard
 static BOOL bRunning;
@@ -59,6 +63,9 @@ static void HMH_LoadXinput(void){
     if(!XinputLib){
         XinputLib= LoadLibraryA("Xinput1_3.dll");
     }
+    if(!XinputLib){
+        XinputLib= LoadLibraryA("Xinput9_1_0.dll");
+    }
     if(XinputLib){
         XInputGetState = (x_input_get_state*) GetProcAddress(XinputLib,"XInputGetState");
         XInputSetState = (x_input_set_state*) GetProcAddress(XinputLib,"XInputSetState");
@@ -94,7 +101,7 @@ static void HMH_InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize
                 BufferDescription.dwSize = sizeof(BufferDescription);
                 BufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
                 
-                //NOTE: Make a primary buffer
+                //NOTE: Make a primary buffer (not a real buffer, it's just to set up the sound card with SetFormat. Legacy logic -_-)
                 LPDIRECTSOUNDBUFFER PrimaryBuffer;
                 if(SUCCEEDED(DSound->lpVtbl->CreateSoundBuffer(DSound, &BufferDescription, &PrimaryBuffer, 0))){ 
                     
@@ -191,7 +198,7 @@ void HMH_ResizeDIBSection(struct HMH_offscreen_buffer *buffer,int Width, int Hei
     buffer->Info.bmiHeader.biCompression = BI_RGB;
 
     int BitMapMemorySize = (buffer->Width*buffer->Height) * buffer->bytesPerPixel;
-    buffer->Memory = VirtualAlloc(0, BitMapMemorySize, MEM_COMMIT,PAGE_READWRITE);
+    buffer->Memory = VirtualAlloc(0, BitMapMemorySize, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE);
 
     buffer->Pitch = Width*buffer->bytesPerPixel;
 }
@@ -293,12 +300,61 @@ HMH_MainWindowCallback(
         break;
     default:
         //OutputDebugStringA("default");
-        result = DefWindowProc(hWnd,Msg,wParam,lParam);
+        result = DefWindowProcA(hWnd,Msg,wParam,lParam);
         break;
     }
 
     return result;
 }
+struct HMH_sound_output{
+    int SamplesPerSec;
+    int ToneHz;
+    int16 ToneVolume;
+    uint32 RunningSampleId;
+    int WavePeriod;
+    int BytesPerSample;
+    int SecondaryBufferSize;
+    real32 tSine;
+    int latencySampleCnt;
+};
+
+static void HMH_fillSoundBuffer(struct HMH_sound_output *SoundOutput, DWORD ByteToLock, DWORD BytesToWrite){
+    VOID* region1;
+    DWORD region1Size;
+    VOID* region2;
+    DWORD region2Size;
+    
+    if(SUCCEEDED(SecondaryBuffer->lpVtbl->Lock(SecondaryBuffer, ByteToLock, BytesToWrite, &region1, &region1Size, &region2, &region2Size, 0))){
+
+        //TODO: assert regionSizes are valid
+        int16* SampleOut = (int16*) region1;
+        DWORD region1SampleCnt = region1Size/SoundOutput->BytesPerSample;
+        for(DWORD SampleId = 0; SampleId < region1SampleCnt; ++SampleId){
+            
+            real32 SineValue = sinf(SoundOutput->tSine);
+            int16 SampleValue = (int16) (SineValue * SoundOutput->ToneVolume);
+            *SampleOut++ = SampleValue;
+            *SampleOut++ = SampleValue;
+            SoundOutput->tSine += 2.0f * PI32 * 1.0f / (real32) SoundOutput->WavePeriod;
+            ++SoundOutput->RunningSampleId;
+        }
+
+        SampleOut = (int16*) region2;
+        DWORD region2SampleCnt = region2Size/SoundOutput->BytesPerSample;
+        for(DWORD SampleId = 0; SampleId < region2SampleCnt; ++SampleId){
+            
+            real32 SineValue = sinf(SoundOutput->tSine);
+            int16 SampleValue = (int16) (SineValue * SoundOutput->ToneVolume);
+            *SampleOut++ = SampleValue;
+            *SampleOut++ = SampleValue;
+            SoundOutput->tSine += 2.0f * PI32 * 1.0f / (real32) SoundOutput->WavePeriod;
+            ++SoundOutput->RunningSampleId;
+        }
+
+        SecondaryBuffer->lpVtbl->Unlock(SecondaryBuffer, region1, region1Size, region2, region2Size);
+    }
+}
+
 
 
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow){
@@ -335,15 +391,18 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             int XOffset = 0;
             int YOffset = 0;
 
-            int SamplesPerSec = 40000;
-            int ToneHz = 256;
-            int16 ToneVolume = 3000;
-            uint32 RunningSampleId = 0;
-            int SquareWavePeriod = SamplesPerSec/ToneHz;
-            int HalfSquareWavePeriod = SquareWavePeriod/2; // To detect ups and downs in the square wave
-            int BytesPerSample = sizeof(int16)*2;
-            int SecondaryBufferSize = SamplesPerSec * BytesPerSample;
-            HMH_InitDSound(WindowHandle, SamplesPerSec, SecondaryBufferSize);
+            struct HMH_sound_output SoundOutput = {};
+            SoundOutput.SamplesPerSec = 40000;
+            SoundOutput.ToneHz = 512;
+            SoundOutput.ToneVolume = 3000;
+            SoundOutput.RunningSampleId = 0;
+            SoundOutput.WavePeriod = SoundOutput.SamplesPerSec/SoundOutput.ToneHz;
+            SoundOutput.BytesPerSample = sizeof(int16)*2;
+            SoundOutput.SecondaryBufferSize = SoundOutput.SamplesPerSec * SoundOutput.BytesPerSample;
+            SoundOutput.latencySampleCnt = SoundOutput.SamplesPerSec / 15;
+
+            HMH_InitDSound(WindowHandle, SoundOutput.SamplesPerSec, SoundOutput.SecondaryBufferSize);
+            HMH_fillSoundBuffer(&SoundOutput, 0, (SoundOutput.latencySampleCnt * SoundOutput.BytesPerSample));
             SecondaryBuffer->lpVtbl->Play(SecondaryBuffer, 0, 0, DSBPLAY_LOOPING);
 
             while(bRunning){
@@ -384,8 +443,11 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                         int16 StickX = Pad->sThumbLX;
                         int16 StickY = Pad->sThumbLY;
 
-                        XOffset += StickX >> 12;
-                        YOffset += StickY >> 12;
+                        XOffset += StickX / 4096;
+                        YOffset += StickY / 4096;
+
+                        SoundOutput.ToneHz = 512 + (int) (256.0f*((real32)StickY / 30000.0f));
+                        SoundOutput.WavePeriod = SoundOutput.SamplesPerSec/SoundOutput.ToneHz;
                     }
                     else{
                         //pas dispo
@@ -398,41 +460,20 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
                 DWORD WriteCursor;
                 if(SUCCEEDED(SecondaryBuffer->lpVtbl->GetCurrentPosition(SecondaryBuffer, &PlayCursor, &WriteCursor))){
 
-                    DWORD ByteToLock  = RunningSampleId * BytesPerSample % SecondaryBufferSize;
+                    DWORD ByteToLock  = (SoundOutput.RunningSampleId * SoundOutput.BytesPerSample) % SoundOutput.SecondaryBufferSize;
+
+                    DWORD targetCursor = (PlayCursor + (SoundOutput.latencySampleCnt * SoundOutput.BytesPerSample)) % SoundOutput.SecondaryBufferSize;
                     DWORD BytesToWrite;
-                    if (ByteToLock > PlayCursor){
-                        BytesToWrite = SecondaryBufferSize - ByteToLock;
-                        BytesToWrite += PlayCursor;
+                    if (ByteToLock > targetCursor){
+                        BytesToWrite = SoundOutput.SecondaryBufferSize - ByteToLock;
+                        BytesToWrite += targetCursor;
                     }
                     else{
-                        BytesToWrite = PlayCursor - ByteToLock;
+                        BytesToWrite = targetCursor - ByteToLock;
                     }
-                    VOID* region1;
-                    DWORD region1Size;
-                    VOID* region2;
-                    DWORD region2Size;
+
+                    HMH_fillSoundBuffer(&SoundOutput, ByteToLock, BytesToWrite);
                     
-                    if(SUCCEEDED(SecondaryBuffer->lpVtbl->Lock(SecondaryBuffer, ByteToLock, BytesToWrite, &region1, &region1Size, &region2, &region2Size, 0))){
-
-                        //TODO: assert regionSizes are valid
-                        int16* SampleOut = (int16*) region1;
-                        DWORD region1SampleCnt = region1Size/BytesPerSample;
-                        for(DWORD SampleId = 0; SampleId < region1SampleCnt; ++SampleId){
-                            int16 SampleValue = ((RunningSampleId++ / HalfSquareWavePeriod) % 2) ? ToneVolume : -ToneVolume;
-                            *SampleOut++ = SampleValue;
-                            *SampleOut++ = SampleValue;
-                        }
-
-                        SampleOut = (int16*) region2;
-                        DWORD region2SampleCnt = region2Size/BytesPerSample;
-                        for(DWORD SampleId = 0; SampleId < region2SampleCnt; ++SampleId){
-                            int16 SampleValue = ((RunningSampleId++ / HalfSquareWavePeriod) % 2) ? ToneVolume : -ToneVolume;
-                            *SampleOut++ = SampleValue;
-                            *SampleOut++ = SampleValue;
-                        }
-
-                        SecondaryBuffer->lpVtbl->Unlock(SecondaryBuffer, region1, region1Size, region2, region2Size);
-                    }
                 }
 
                 struct HMH_Window_dimension Dimension = getWindowDimension(WindowHandle);

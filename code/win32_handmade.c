@@ -3,6 +3,7 @@
 #include <xinput.h>
 #include <dsound.h>
 #include <math.h>
+#include <stdio.h> //TODO: à delete, Juste car OutputDebugString ne marche pas -_-
 
 #define PI32 3.14159265359f
 
@@ -359,6 +360,10 @@ static void HMH_fillSoundBuffer(struct HMH_sound_output *SoundOutput, DWORD Byte
 
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow){
     
+    LARGE_INTEGER PerfCntFreqResult;
+    QueryPerformanceFrequency(&PerfCntFreqResult);
+    int64 PerfCntFreq = PerfCntFreqResult.QuadPart;
+
     HMH_LoadXinput();
 
     WNDCLASSA WindowClass = {0};
@@ -391,6 +396,8 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             int XOffset = 0;
             int YOffset = 0;
 
+            //// Sound init
+            //
             struct HMH_sound_output SoundOutput = {};
             SoundOutput.SamplesPerSec = 40000;
             SoundOutput.ToneHz = 512;
@@ -404,9 +411,16 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
             HMH_InitDSound(WindowHandle, SoundOutput.SamplesPerSec, SoundOutput.SecondaryBufferSize);
             HMH_fillSoundBuffer(&SoundOutput, 0, (SoundOutput.latencySampleCnt * SoundOutput.BytesPerSample));
             SecondaryBuffer->lpVtbl->Play(SecondaryBuffer, 0, 0, DSBPLAY_LOOPING);
+            //
 
+            //Start Performance counters
+            LARGE_INTEGER LastCnt;
+            QueryPerformanceCounter(&LastCnt);
+            uint64 LastCycleCnt = __rdtsc();
+
+            //Game Loop
             while(bRunning){
-            
+
                 MSG message;
                 while(PeekMessage(&message, 0, 0, 0, PM_REMOVE)){
                     if (message.message == WM_QUIT){
@@ -480,6 +494,28 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
                 HMH_DisplayBufferInWindow(&BackBuffer, DContextPaint, Dimension.Width, Dimension.Height);
 
+
+                ////
+                // Performance counters
+                uint64 EndCycleCnt = __rdtsc();
+                LARGE_INTEGER EndCnt;
+                QueryPerformanceCounter(&EndCnt);
+
+                //TODO: Display PerformanceCnt
+                uint64 CycleElapsed = EndCycleCnt - LastCycleCnt;
+                int64 CntElapsed = EndCnt.QuadPart - LastCnt.QuadPart;
+                real32 msPerFrame = (1000.0f * (real32) CntElapsed) / (real32) PerfCntFreq;
+                real32 FPS = (real32) PerfCntFreq / (real32) CntElapsed;
+                real32 megaCyclePerFrame = ((real32) CycleElapsed /(1000.0f*1000.0f));
+
+                char Buffer[256];
+                sprintf(Buffer, "ms/frame: %f ms // FPS: %f // MegaCycle/frame: %f \n", msPerFrame, FPS, megaCyclePerFrame);
+                printf("%s", Buffer);
+                fflush(stdout);
+
+                LastCnt = EndCnt;
+                LastCycleCnt = EndCycleCnt;
+                ////
             }
         }
         else{
